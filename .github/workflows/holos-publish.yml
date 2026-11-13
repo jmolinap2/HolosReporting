@@ -1,0 +1,84 @@
+name: Holos - publish packages to nuget.org
+
+# Publishes the Holos.Reporting.* packages (the fork's renamed Majorsilence Reporting libraries) when a tag
+# named holos-v<version> is pushed, e.g.  git tag holos-v27.0.0-holos.2 && git push origin holos-v27.0.0-holos.2
+# The tag decides the package version (27.0.0-holos.2). Nothing is published by a push to a branch.
+#
+# Authentication, either one:
+#  * Trusted Publishing (no stored key), same as upstream's publish-nuget.yml. One-time setup on nuget.org:
+#      username -> Trusted Publishing -> add policy
+#        Repository Owner: jmolinap2    Repository: HolosReporting
+#        Workflow File:    holos-publish.yml    Environment: (blank)
+#    and a repository variable NUGET_USER with the nuget.org user name that owns the policy.
+#  * An API key stored as the repository secret NUGET_API_KEY (scope: push, glob Holos.Reporting.*).
+# The workflow uses the secret when it exists and Trusted Publishing otherwise.
+
+on:
+  push:
+    tags: ['holos-v*']
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # NuGet/login exchanges this for a short-lived API key
+      contents: read
+    env:
+      NUGET_API_KEY_SECRET: ${{ secrets.NUGET_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Version from the tag
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#holos-v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not look like holos-v<semver>"; exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Fonts the engine needs on Linux
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libfontconfig1 fonts-liberation fonts-dejavu-core
+
+      # net10.0 only: the engine also declares net11.0, which the SDK 10 cannot build.
+      - name: Tests
+        run: dotnet test ReportTests/ReportTests.csproj -f net10.0 -p:TargetFrameworks=net10.0 --nologo
+
+      - name: Pack
+        run: |
+          mkdir -p nupkg
+          for project in \
+            DataProviders/Majorsilence.Reporting.DataProviders.csproj \
+            Majorsilence.Spreadsheet/Majorsilence.Spreadsheet.csproj \
+            Majorsilence.Pdf/Majorsilence.Pdf.csproj \
+            Majorsilence.Pdf.Security/Majorsilence.Pdf.Security.csproj \
+            RdlEngine/Majorsilence.Reporting.RdlEngine.csproj; do
+            dotnet build "$project" -c Release -p:HolosPackaging=true -p:TargetFrameworks=net10.0 \
+              -p:Version="$VERSION" -p:IncludeSymbols=false --nologo
+          done
+          find . -path ./nupkg -prune -o -name "*.$VERSION.nupkg" -print -exec cp {} nupkg/ \;
+          ls -l nupkg
+          test "$(ls nupkg/Holos.Reporting.*.nupkg | wc -l)" -eq 5
+
+      - name: NuGet login (Trusted Publishing)
+        if: ${{ env.NUGET_API_KEY_SECRET == '' }}
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: ${{ vars.NUGET_USER }}
+
+      - name: Push to nuget.org
+        env:
+          LOGIN_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+        run: |
+          KEY="${NUGET_API_KEY_SECRET:-$LOGIN_KEY}"
+          test -n "$KEY" || { echo "::error::No NuGet credentials: set NUGET_API_KEY or configure Trusted Publishing"; exit 1; }
+          dotnet nuget push "nupkg/*.nupkg" --api-key "$KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate

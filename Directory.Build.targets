@@ -70,4 +70,16 @@
       <_RequiresILLinkPack>false</_RequiresILLinkPack>
     </PropertyGroup>
   </Target>
+
+  <!--
+    Holos fork: nuget.org already has the upstream Majorsilence.* packages, so the fork publishes the same
+    libraries under its own ids (Holos.Reporting.RdlEngine, Holos.Reporting.Pdf, ...). Only when packing with
+    -p:HolosPackaging=true; ordinary builds keep the upstream ids. Namespaces and assembly names are unchanged.
+    ProjectReference dependencies pick the renamed ids up because every project is packed with the same property.
+  -->
+  <PropertyGroup Condition="'$(HolosPackaging)' == 'true' AND '$(PackageId)' != ''">
+    <PackageId>$([System.String]::Copy('$(PackageId)').Replace('Majorsilence.Reporting.', 'Holos.Reporting.').Replace('Majorsilence.', 'Holos.Reporting.'))</PackageId>
+    <PackageProjectUrl>https://github.com/jmolinap2/HolosReporting</PackageProjectUrl>
+    <Description>$(Description) Fork of Majorsilence Reporting (Apache-2.0) with ReportViewer-compatible rendering of mixed run formatting and last-line overflow.</Description>
+  </PropertyGroup>
 </Project>
