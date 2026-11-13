@@ -78,9 +78,9 @@ namespace Majorsilence.Reporting.Rdl
 
         public Task Textbox(Textbox tb, string t, Row r)
         {
-            if (tb.TryEvaluate(report, r, out object value))     // the usual plain field: no Task per cell
+            if (tb.TryEvaluate(report, r, out object value) && tb.TryIsHtml(out bool isHtml))     // the usual plain field: no Task per cell
             {
-                tw.Write(value);
+                tw.Write(isHtml && value is string html ? HtmlPlainText.Convert(html) : value);
                 return Task.CompletedTask;
             }
             return TextboxAsync(tb, r);
@@ -89,9 +89,12 @@ namespace Majorsilence.Reporting.Rdl
         private async Task TextboxAsync(Textbox tb, Row r)
         {
             object value = await tb.Evaluate(report, r).ConfigureAwait(false);
+            // CSV has no html: a textbox laid out as html is written as its text.
+            if (value is string html && await tb.IsHtml(report, r).ConfigureAwait(false))
+                value = HtmlPlainText.Convert(html);
             tw.Write(value);
-        }	
-        
+        }
+
         public Task DataRegionNoRows(DataRegion d, string noRowsMsg)
         {
             return Task.CompletedTask;

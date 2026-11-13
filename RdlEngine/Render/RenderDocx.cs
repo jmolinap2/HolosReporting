@@ -52,8 +52,6 @@ namespace Majorsilence.Reporting.Rdl
         const string EmptyParagraphProps =
             "<w:spacing w:before=\"0\" w:after=\"0\" w:line=\"20\" w:lineRule=\"exact\"/><w:rPr><w:sz w:val=\"2\"/><w:szCs w:val=\"2\"/></w:rPr>";
 
-        static readonly Regex HtmlBreak = new Regex(@"<\s*(br|/p|/div|/li|/tr|/h[1-6])\b[^>]*>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-        static readonly Regex HtmlTag = new Regex(@"<[^>]*>", RegexOptions.Compiled);
 
         /// <summary>
         /// One XML part being written: document.xml, a header or a footer.  Images are related
@@ -467,10 +465,7 @@ namespace Majorsilence.Reporting.Rdl
         /// </summary>
         private static string HtmlToText(string html)
         {
-            string s = HtmlBreak.Replace(html, "\n");
-            s = HtmlTag.Replace(s, "");
-            s = WebUtility.HtmlDecode(s);
-            return s.TrimEnd('\n', '\r');
+            return HtmlPlainText.Convert(html);
         }
 
         /// <summary>

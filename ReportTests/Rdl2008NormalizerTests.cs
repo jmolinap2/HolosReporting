@@ -885,6 +885,63 @@ namespace ReportTests
             Assert.That (report.ErrorMaxSeverity, Is.LessThanOrEqualTo (4),
                 "battery failed: " + string.Join (" | ", report.ErrorItems ?? new System.Collections.ArrayList ()));
         }
+        // The html a mixed-formatting textbox is laid out with is for the outputs that have html; Excel and CSV get its text.
+        private const string LabelAndValueWithMarkupInData = @"<Textbox Name=""LabelValue"">
+                <Paragraphs><Paragraph><TextRuns>
+                  <TextRun><Value>Note: </Value><Style><FontWeight>Bold</FontWeight></Style></TextRun>
+                  <TextRun><Value>=""a &lt; b &amp; c""</Value><Style /></TextRun>
+                </TextRuns></Paragraph></Paragraphs>
+                <Style /></Textbox>";
+
+        [Test]
+        public async Task TextRuns_WithDifferentFormatting_AreWrittenAsPlainText_InCsv ()
+        {
+            var rdl = TablixReport (HeaderThenDetail,
+                Row ("0.25in", Cell (Textbox ("H1", "Name")), Cell (Textbox ("H2", "Amount"))) +
+                Row ("0.25in", Cell (LabelAndValueWithMarkupInData), Cell (Textbox ("D2", "=Fields!Amount.Value"))));
+
+            var csv = await RenderText (rdl, OutputPresentationType.CSV);
+
+            Assert.That (csv, Does.Contain ("Note: a < b & c"), "the label and the value are the cell's text");
+            Assert.That (csv, Does.Not.Contain ("<span"), "html markup leaked into the csv");
+        }
+
+        [Test]
+        public async Task TextRuns_WithDifferentFormatting_AreWrittenAsPlainText_InExcel ()
+        {
+            var rdl = TablixReport (HeaderThenDetail,
+                Row ("0.25in", Cell (Textbox ("H1", "Name")), Cell (Textbox ("H2", "Amount"))) +
+                Row ("0.25in", Cell (LabelAndValueWithMarkupInData), Cell (Textbox ("D2", "=Fields!Amount.Value"))));
+
+            using var report = await ParseAsync (rdl);
+            await report.DataSets["Data"].SetData (SampleData ());
+            await report.RunGetData (null);
+            using var memory = new MemoryStreamGen ();
+            await report.RunRender (memory, OutputPresentationType.Excel2007);
+
+            using var archive = new System.IO.Compression.ZipArchive (new MemoryStream (((MemoryStream) memory.GetStream ()).ToArray ()));
+            var all = new System.Text.StringBuilder ();
+            foreach (var entry in archive.Entries)
+            {
+                if (!entry.FullName.EndsWith (".xml")) continue;
+                using var reader = new StreamReader (entry.Open ());
+                all.Append (reader.ReadToEnd ());
+            }
+
+            Assert.That (all.ToString (), Does.Contain ("Note: a &lt; b &amp; c"), "the cell holds the text (xml-escaped)");
+            Assert.That (all.ToString (), Does.Not.Contain ("&lt;span"), "html markup leaked into the workbook");
+        }
+
+        private static async Task<string> RenderText (string rdl, OutputPresentationType type)
+        {
+            using var report = await ParseAsync (rdl);
+            await report.DataSets["Data"].SetData (SampleData ());
+            await report.RunGetData (null);
+            using var memory = new MemoryStreamGen ();
+            await report.RunRender (memory, type);
+            return memory.GetText ();
+        }
+
         private static async Task<string> RenderHtml (string rdl)
         {
             using var report = await ParseAsync (rdl);
