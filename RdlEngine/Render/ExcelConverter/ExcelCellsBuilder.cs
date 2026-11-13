@@ -261,7 +261,11 @@ namespace RdlEngine.Render.ExcelConverter
 			if (excelCell.Value == null || excelCell.Value.Length == 0)
 				return;
 			if (textbox.TryIsHtml(out bool isHtml) ? isHtml : await textbox.IsHtml(Report, row).ConfigureAwait(false))
+			{
+				// Excel has no html: the cell is the text without the markup.
+				excelCell.Value = HtmlPlainText.Convert(excelCell.Value);
 				return;
+			}
 
 			object value = await textbox.Evaluate(Report, row).ConfigureAwait(false);
 			if (value == null || value is string)
