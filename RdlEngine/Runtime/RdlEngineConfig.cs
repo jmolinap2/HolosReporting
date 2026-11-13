@@ -21,6 +21,15 @@ namespace Majorsilence.Reporting.Rdl
     ///</summary> 
     public class RdlEngineConfig
     {
+        /// <summary>
+        /// Fraction (0.1 to 1) of a line's height that must lie inside a textbox that cannot grow
+        /// (CanGrow=false) for the PDF renderer to draw that line. The default, 1, draws only the lines
+        /// that fit entirely. SQL Server ReportViewer draws a last line that overflows the box by a
+        /// hair (for example two 5.2pt lines in a 0.40cm box), so a lower value (0.5, say) reproduces
+        /// its output instead of silently dropping that line.
+        /// </summary>
+        public static float PdfMinimumVisibleLineFraction { get; set; } = 1f;
+
         // SqlEntries is what everything checks to know the config has been read, so it is published
         // last (see RdlEngineConfigInit) and is volatile so a thread that sees it also sees the rest.
         static internal volatile IDictionary SqlEntries = null;
