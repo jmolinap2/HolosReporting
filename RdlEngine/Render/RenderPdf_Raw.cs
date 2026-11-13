@@ -463,7 +463,8 @@ namespace Majorsilence.Reporting.Rdl
             // pitch of the last line too dropped the third line of a box three lines of
             // 14.25pt high that its letters fit, below 41.25pt. With no LineHeight the pitch
             // is the em, and this is the whole lines that fit, as before.
-            return Math.Max(1, (int)Math.Floor((availableH - emHeight) / pitch) + 1);
+            float visible = Math.Clamp(RdlEngineConfig.PdfMinimumVisibleLineFraction, 0.1f, 1f);
+            return Math.Max(1, (int)Math.Floor((availableH - emHeight * visible) / pitch) + 1);
         }
 
         // ── PDF-accurate text re-wrapping ─────────────────────────────────────
