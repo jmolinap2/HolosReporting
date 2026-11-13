@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Text;
 using System.Xml;
 
@@ -325,8 +326,11 @@ namespace Majorsilence.Reporting.Rdl
             XmlElement firstRunStyle = null;
             var droppedRuns = false;
             var anyParagraphIsExpression = false;
+            var runInfos = new List<(int Paragraph, string Value, XmlElement Style)> ();
+            var paragraphIndex = -1;
 
             foreach (var paragraph in ChildrenNamed (paragraphs, "Paragraph")) {
+                paragraphIndex++;
                 firstParagraphStyle ??= FindChild (paragraph, "Style");
 
                 var runs = FindChild (paragraph, "TextRuns");
@@ -344,6 +348,7 @@ namespace Majorsilence.Reporting.Rdl
                         runIsExpression = true;
 
                     runValues.Add (value);
+                    runInfos.Add ((paragraphIndex, value, FindChild (run, "Style")));
                 }
 
                 if (runValues.Count == 0)
@@ -365,7 +370,11 @@ namespace Majorsilence.Reporting.Rdl
                 texts.Add (paragraphText);
             }
 
-            if (droppedRuns) {
+            // Runs that differ in font, weight, style or colour are laid out as html (spans and breaks), the
+            // engine's per-segment formatting, so a bold label followed by a normal value keeps both looks.
+            var richHtml = BuildRichTextExpression (runInfos);
+
+            if (richHtml == null && droppedRuns) {
                 // The text survives; only the per-run formatting is lost, since the merged Style
                 // below can hold just one font/colour for the whole textbox.
                 rl?.LogError (4, $"Textbox '{textbox.GetAttribute ("Name")}' has several TextRuns in a " +
@@ -384,16 +393,123 @@ namespace Majorsilence.Reporting.Rdl
             // expression-bearing paragraphs must become one expression, joined by "Chr(10)" so
             // the line break comes from the evaluated data instead of from markup the parser
             // would otherwise choke on.
-            valueElement.InnerText = texts.Count > 1 && anyParagraphIsExpression
-                ? CombineAsExpression (texts, " & Chr(10) & ")
-                : string.Join ("\n", texts);
+            valueElement.InnerText = richHtml
+                ?? (texts.Count > 1 && anyParagraphIsExpression
+                    ? CombineAsExpression (texts, " & Chr(10) & ")
+                    : string.Join ("\n", texts));
             textbox.AppendChild (valueElement);
 
             // Least specific first: the box's own style is the base, the paragraph overrides it
             // (alignment), and the run wins outright (font, colour) -- the order the 2008 renderer
             // resolves them in.
             MergeStyleInto (textbox, firstParagraphStyle);
-            MergeStyleInto (textbox, firstRunStyle);
+            // As html, each span carries its own run's formatting: merging the first run's into the box
+            // would make every other run inherit it (a normal value after a bold label would turn bold).
+            if (richHtml == null)
+                MergeStyleInto (textbox, firstRunStyle);
+
+            if (richHtml != null) {
+                var style = FindChild (textbox, "Style");
+                if (style == null) {
+                    style = doc.CreateElement ("Style", textbox.NamespaceURI);
+                    textbox.AppendChild (style);
+                }
+                var format = FindChild (style, "Format");
+                if (format != null)
+                    style.RemoveChild (format);
+                format = doc.CreateElement ("Format", textbox.NamespaceURI);
+                format.InnerText = "html";
+                style.AppendChild (format);
+            }
+        }
+
+        private static readonly string[] RunFormatProperties = { "FontFamily", "FontSize", "FontWeight", "FontStyle", "Color", "TextDecoration" };
+
+        /// <summary>
+        /// For a textbox whose runs differ in formatting, returns one RDL expression that evaluates to html
+        /// (a span per run, a break per paragraph) with every run's text escaped; null when all runs look
+        /// alike or the formatting cannot be written as constants (the caller then keeps the single style).
+        /// </summary>
+        private static string BuildRichTextExpression (List<(int Paragraph, string Value, XmlElement Style)> runs)
+        {
+            if (runs.Count < 2)
+                return null;
+
+            var css = new List<string> ();
+            foreach (var run in runs) {
+                var parts = new List<string> ();
+                if (run.Style != null) {
+                    foreach (var name in RunFormatProperties) {
+                        var property = FindChild (run.Style, name);
+                        if (property == null)
+                            continue;
+                        var value = property.InnerText.Trim ();
+                        if (value.StartsWith ("=", StringComparison.Ordinal))
+                            return null;   // formatting by expression: keep the single merged style
+                        parts.Add (RunCssProperty (name, value));
+                    }
+                    var format = FindChild (run.Style, "Format");
+                    if (format != null && !string.IsNullOrWhiteSpace (format.InnerText))
+                        return null;       // a number/date format cannot be applied to escaped html text
+                }
+                css.Add (string.Join (";", parts.Where (p => p.Length > 0)));
+            }
+            if (css.Distinct ().Count () < 2)
+                return null;
+
+            // Literals are joined into one string; each expression run is escaped when evaluated.
+            var expression = new StringBuilder ("=");
+            var literal = new StringBuilder ();
+            var first = true;
+            void FlushLiteral ()
+            {
+                if (literal.Length == 0)
+                    return;
+                if (!first)
+                    expression.Append (" & ");
+                expression.Append ('"').Append (literal.ToString ().Replace ("\"", "\"\"")).Append ('"');
+                first = false;
+                literal.Clear ();
+            }
+
+            var previousParagraph = runs[0].Paragraph;
+            for (var i = 0; i < runs.Count; i++) {
+                if (runs[i].Paragraph != previousParagraph) {
+                    literal.Append ("<br>");
+                    previousParagraph = runs[i].Paragraph;
+                }
+                literal.Append (css[i].Length > 0 ? "<span style='" + css[i] + "'>" : "<span>");
+                var text = runs[i].Value;
+                if (text.StartsWith ("=", StringComparison.Ordinal)) {
+                    FlushLiteral ();
+                    if (!first)
+                        expression.Append (" & ");
+                    expression.Append ("Replace(Replace(Replace(Replace(Replace(\"\" & (")
+                        .Append (text, 1, text.Length - 1)
+                        .Append ("),\"&\",\"&amp;\"),\"<\",\"&lt;\"),\">\",\"&gt;\"),Chr(13),\"\"),Chr(10),\"<br>\")");
+                    first = false;
+                } else {
+                    literal.Append (System.Net.WebUtility.HtmlEncode (text).Replace ("\r", "").Replace ("\n", "<br>"));
+                }
+                literal.Append ("</span>");
+            }
+            FlushLiteral ();
+            return expression.ToString ();
+        }
+
+        private static string RunCssProperty (string name, string value)
+        {
+            switch (name) {
+                case "FontFamily": return "font-family:" + value;
+                case "FontSize": return "font-size:" + value;
+                case "FontWeight": return "font-weight:" + value.ToLowerInvariant ();
+                case "FontStyle": return "font-style:" + value.ToLowerInvariant ();
+                case "Color": return "color:" + value;
+                case "TextDecoration":
+                    return value.Equals ("Underline", StringComparison.OrdinalIgnoreCase) ? "text-decoration:underline"
+                        : value.Equals ("LineThrough", StringComparison.OrdinalIgnoreCase) ? "text-decoration:line-through" : string.Empty;
+                default: return string.Empty;
+            }
         }
 
         /// <summary>

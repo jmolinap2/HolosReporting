@@ -293,6 +293,52 @@ namespace ReportTests
             Assert.That (html, Does.Contain ("a trailing literal line"), "third (literal) paragraph lost");
         }
 
+        // A bold label followed by a normal value in one paragraph (the layout of the clinical key/value rows):
+        // the textbox is laid out as html so that each run keeps its own weight and size.
+        [Test]
+        public async Task TextRuns_WithDifferentFormatting_KeepTheirOwnLook_AsHtml ()
+        {
+            var labelAndValue = @"<Textbox Name=""LabelValue"">
+                <Paragraphs><Paragraph><TextRuns>
+                  <TextRun><Value>Total: </Value><Style><FontSize>8pt</FontSize><FontWeight>Bold</FontWeight></Style></TextRun>
+                  <TextRun><Value>=Fields!Name.Value</Value><Style><FontSize>9pt</FontSize></Style></TextRun>
+                </TextRuns></Paragraph></Paragraphs>
+                <Style /></Textbox>";
+
+            var rdl = TablixReport (HeaderThenDetail,
+                Row ("0.25in", Cell (Textbox ("H1", "Name")), Cell (Textbox ("H2", "Amount"))) +
+                Row ("0.25in", Cell (labelAndValue), Cell (Textbox ("D2", "=Fields!Amount.Value"))));
+
+            var html = await RenderHtml (rdl);
+
+            Assert.That (html, Does.Contain ("Total:"), "label run lost");
+            Assert.That (html, Does.Contain ("Widget"), "value run lost");
+            // The bold label and the plain value are different segments, not one flattened style.
+            Assert.That (html, Does.Match (@"(?is)font-weight:\s*bold[^>]*>\s*Total:"), "label lost its bold weight");
+            Assert.That (html, Does.Not.Match (@"(?is)font-weight:\s*bold[^>]*>\s*Widget"), "value inherited the label's bold weight");
+        }
+
+        // Escaping: the evaluated text of a run is data, never markup.
+        [Test]
+        public async Task TextRuns_WithDifferentFormatting_EscapeMarkupInTheData ()
+        {
+            var labelAndValue = @"<Textbox Name=""LabelValue"">
+                <Paragraphs><Paragraph><TextRuns>
+                  <TextRun><Value>Note: </Value><Style><FontWeight>Bold</FontWeight></Style></TextRun>
+                  <TextRun><Value>=""a &lt; b &amp; c &gt; d""</Value><Style /></TextRun>
+                </TextRuns></Paragraph></Paragraphs>
+                <Style /></Textbox>";
+
+            var rdl = TablixReport (HeaderThenDetail,
+                Row ("0.25in", Cell (Textbox ("H1", "Name")), Cell (Textbox ("H2", "Amount"))) +
+                Row ("0.25in", Cell (labelAndValue), Cell (Textbox ("D2", "=Fields!Amount.Value"))));
+
+            var html = await RenderHtml (rdl);
+
+            Assert.That (html, Does.Contain ("a &lt; b &amp; c &gt; d").Or.Contain ("a < b & c > d"),
+                "the text must come out as text, not be read as tags");
+        }
+
         [Test]
         public async Task LoneGroupRow_BesideAHiddenDetailGroup_IsOneRowPerGroupInstance ()
         {
